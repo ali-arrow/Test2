@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting" xmlns:batch="http://www.mulesoft.org/schema/mule/batch" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:json="http://www.mulesoft.org/schema/mule/json"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd">
+<!-- =========================================================================   -->
+	<flow name="commodities:poll_for_changes" initialState="started">
+		<poll doc:name="Poll">
+			<fixed-frequency-scheduler frequency="300" 
+				startDelay="10" timeUnit="SECONDS" />
+			<logger
+				message="#[app.name.toUpperCase()]: #[flow.name.toUpperCase()]: POLLING FOR COMMODITIES CHANGES"
+				level="INFO" category="ESB" doc:name="Logger" />
+		</poll>
+		<http:request config-ref="TRANSACTION_MANAGER_HTTP_CONFIG"
+			path="/data-sync/source-systems/dtms/data-types/commodity/last-sync-info"
+			method="GET" doc:name="GET Last Sync Info" requestStreamingMode="NEVER">
+			<http:request-builder />
+			<http:success-status-code-validator
+				values="0..999" />
+		</http:request>
+		<choice doc:name="Choice">
+			<when expression="#[message.inboundProperties['http.status'] == 200]">
+				<json:json-to-object-transformer
+					returnClass="java.util.Map" doc:name="JSON to Object" />
+				<flow-ref name="commodities:incremental_import" doc:name="Incremental Import" />
+			</when>
+			<when expression="#[message.inboundProperties['http.status'] == 404]">
+				<flow-ref name="commodities:initial_import" doc:name="Initial Import" />
+			</when>
+			<otherwise>
+				<logger
+					message="#[app.name.toUpperCase()]: #[flow.name.toUpperCase()]: LASTY SYNC INFO RESPONSE NOT RECOGNISED: #[message.inboundProperties['http.status']]"
+					level="WARN" category="ESB" doc:name="Logger" />
+			</otherwise>
+		</choice>
+		<catch-exception-strategy doc:name="Catch Exception Strategy">
+			<logger
+				message="#[app.name.toUpperCase()]: #[flow.name.toUpperCase()]: #[exception]"
+				level="WARN" category="ESB" doc:name="Logger" />
+		</catch-exception-strategy>
+	</flow>
+<!--==========================================================================   -->
+
+<sub-flow name="commodities:incremental_import">
+		<logger
+			message="#[app.name.toUpperCase()]: #[flow.name.toUpperCase()]: COMMODITIES' INCREMENTAL IMPORT"
+			level="INFO" category="ESB" doc:name="Logger" />
+		<enricher target="#[flowVars.to_lsn]" doc:name="Message Enricher">
+			<flow-ref name="dtms:get_max_lsn" doc:name="Get Max Lsn" />
+		</enricher>
+		<expression-filter expression="#[flowVars.to_lsn != payload.last_change_id]"
+			doc:name="Expression" />
+		<db:select config-ref="DTMS_DB_CONNECTOR" doc:name="Select Changed commodities">
+            <db:dynamic-query><![CDATA[select 
+ LTRIM(RTRIM(pu.Ccode)) AS Code,
+ pu.Division,
+ (CASE pu.AccFlg WHEN 0 THEN 'False' ELSE 'True' END) AS AccessorialFlag,pu.Descr
+ from																					
+ dbo.cmodity pu Inner Join
+ 							(select Distinct Ccode from cdc.fn_cdc_get_all_changes_dbo_cmodity(sys.fn_cdc_increment_lsn(convert(Binary,'#[payload.last_change_id]',1)),convert(Binary,'#[flowVars.to_lsn]',1), 'all')) c1
+ 																									on c1.Ccode = pu.Ccode]]></db:dynamic-query>
+		</db:select>
+        <flow-ref name="commodities:process_commodity_list" doc:name="Process commodity List"/>
+        <flow-ref name="commodities:save_last_sync_info" doc:name="Save Last Sync Info"/>
+	</sub-flow>
+<!--==========================================================================   -->
+<!-- ==========================================================================  -->	
+	
+	<sub-flow name="commodities:initial_import">
+		<logger
+			message="#[app.name.toUpperCase()]: #[flow.name.toUpperCase()]: COMMODITIES' INITIAL IMPORT"
+			level="INFO" category="ESB" doc:name="Logger" />
+		<enricher target="#[flowVars.to_lsn]" doc:name="Message Enricher">
+			<flow-ref name="dtms:get_max_lsn" doc:name="Get Max Lsn" />
+		</enricher>
+        <db:select config-ref="DTMS_DB_CONNECTOR" doc:name="Select All Commodities">
+            <db:parameterized-query><![CDATA[SELECT LTRIM(RTRIM(Ccode)) AS code, division, (CASE AccFlg WHEN 0 THEN 'False' ELSE 'True' END) AS accessorialflag, descr FROM dtms.dbo.cmodity where Division != #["*"]]]></db:parameterized-query>
+        </db:select>
+		<flow-ref name="commodities:process_commodity_list" doc:name="Process Commodities List" />
+		<flow-ref name="commodities:save_last_sync_info" doc:name="Save Last Sync Info" />
+	</sub-flow>
+<!-- ==========================================================================  -->
+<sub-flow name="commodities:process_commodity_list">
+        <expression-filter expression="#[payload.size() &gt; 0]" doc:name="Expression"/>
+		<foreach collection="#[payload]" doc:name="For Each">
+			<logger
+				message="#[app.name.toUpperCase()]: #[flow.name.toUpperCase()]: PROCESSING COMMODITY: #[payload.code]"
+				level="INFO" category="ESB" doc:name="Logger" />
+            <set-session-variable variableName="ou" value="" encoding="UTF-8" mimeType="application/csv" doc:name="Session Variable"/>
+            <message-properties-transformer doc:name="Message Properties">
+                <add-message-property key="Division" value="#[payload.Division]"/>
+</message-properties-transformer>
+            <enricher target="#[payload.Division]" doc:name="Message Enricher">
+                <component class="ConvertingStringtoArray" doc:name="Java"/>
+            </enricher>
+            <foreach collection="#[payload.Division]" doc:name="For Each">
+                <message-properties-transformer doc:name="Message Properties">
+                    <add-message-property key="Division" value="#[rootMessage.payload.Division[counter-1]]"/>
+                </message-properties-transformer>
+                <component class="ConvertingStringtoArray1" doc:name="Java"/>
+                <enricher target="#[flowVars.ou_id]" doc:name="Message Enricher">
+                    <flow-ref name="dtms:get_ou_code" doc:name="Get OU ID"/>
+                </enricher>
+                <message-properties-transformer doc:name="Message Properties">
+                    <add-message-property key="OUID" value="#[rootMessage.payload.Division[counter-1]]"/>
+                </message-properties-transformer>
+                <component class="ConvertingOuIdtoArray" doc:name="Java"/>
+            </foreach>
+            <logger message="#[sessionVars.OU_ARRAY]" level="INFO" doc:name="Logger"/>
+            <enricher target="#[flowVars.commodity_exists]" doc:name="Message Enricher">
+                <flow-ref name="commodities:commodity_exists" doc:name="Commodity Exists"/>
+            </enricher>
+            <enricher target="#[flowVars.AccessorialFlag]" doc:name="Message Enricher">
+                <flow-ref name="commodities:get_status" doc:name="Get Status"/>
+            </enricher>
+            <set-variable variableName="commodity_payload" value="{&quot;commodity_code&quot;:&quot;#[payload.code]&quot;,&quot;commodity_name&quot;:&quot;#[payload.descr]&quot;,&quot;status&quot;:&quot;#[flowVars.AccessorialFlag]&quot;,&quot;divisions&quot;:#[sessionVars.OU_ARRAY]}" encoding="UTF-8" mimeType="text/plain" doc:name="Variable"/>
+            <logger message="#[flowVars.commodity_payload]" level="INFO" doc:name="Logger"/>
+            <choice doc:name="Choice">
+                <when expression="#[flowVars.commodity_exists == true]">
+                    <logger message="#[app.name.toUpperCase()]: #[flow.name.toUpperCase()]: COMMODITY UPDATE: #[flowVars.commodity_payload]" level="INFO" category="ESB" doc:name="Logger"/>
+                    <http:request config-ref="RESOURCE_MASTER_HTTP_CONFIG" path="/commodities/{commodity_code}" method="PUT" source="#[flowVars.commodity_payload]" requestStreamingMode="NEVER" doc:name="HTTP">
+                        <http:request-builder>
+                            <http:uri-param paramName="commodity_code" value="#[payload.code]"/>
+                            <http:header headerName="Content-Type" value="application/json"/>
+                        </http:request-builder>
+                        <http:success-status-code-validator values="200"/>
+                    </http:request>
+                </when>
+                <otherwise>
+                    <logger message="#[app.name.toUpperCase()]: #[flow.name.toUpperCase()]: COMMODITY INSERT: #[flowVars.commodity_payload]" level="INFO" category="ESB" doc:name="Logger"/>
+                    <http:request config-ref="RESOURCE_MASTER_HTTP_CONFIG" path="/commodities" method="POST" source="#[flowVars.commodity_payload]" requestStreamingMode="NEVER" doc:name="HTTP">
+                        <http:request-builder>
+                            <http:header headerName="Content-Type" value="application/json"/>
+                        </http:request-builder>
+                        <http:success-status-code-validator values="200"/>
+                    </http:request>
+                </otherwise>
+            </choice>
+		</foreach>
+	</sub-flow>
+
+<!-- ==========================================================================  -->
+
+
+
+
+<sub-flow name="commodities:save_last_sync_info">
+		<set-variable variableName="last_sync_info"
+			value="{&quot;last_change_date_time&quot;:&quot;#[server.dateTime]&quot;, &quot;last_change_id&quot;:&quot;#[flowVars.to_lsn]&quot;}"
+			doc:name="Variable" />
+		<http:request config-ref="TRANSACTION_MANAGER_HTTP_CONFIG"
+			path="/data-sync/source-systems/dtms/data-types/commodity/last-sync-info"
+			method="PUT" source="#[flowVars.last_sync_info]"
+			requestStreamingMode="NEVER" doc:name="PUT Last Sync Info">
+			<http:request-builder>
+				<http:header headerName="Content-Type" value="application/json" />
+			</http:request-builder>
+			<http:success-status-code-validator
+				values="200" />
+		</http:request>
+	</sub-flow>
+<!-- ==========================================================================  -->
+
+
+<sub-flow name="commodities:commodity_exists">
+        <logger message="#[payload.code]" level="INFO" doc:name="Logger"/>
+		<http:request config-ref="RESOURCE_MASTER_HTTP_CONFIG"
+			path="/commodities/{commodity_code}" method="GET" doc:name="HTTP">
+			<http:request-builder>
+                <http:uri-param paramName="commodity_code" value="#[payload.code]"/>
+			</http:request-builder>
+			<http:success-status-code-validator
+				values="0..999" />
+		</http:request>
+		<set-payload
+			value="#[(message.inboundProperties['http.status'] == 200) ? true : false]"
+			doc:name="Set Payload" />
+	</sub-flow>
+<!-- ==========================================================================  -->
+
+
+
+<sub-flow name="commodities:get_status">
+		<choice doc:name="Choice">
+			<when expression="#[payload.AccessorialFlag == true]">
+				<set-payload value="ACTIVE" doc:name="ACTIVE" />
+			</when>
+			<otherwise>
+				<set-payload value="INACTIVE" doc:name="INACTIVE" />
+			</otherwise>
+		</choice>
+	</sub-flow>
+<!-- ==========================================================================  -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</mule>
