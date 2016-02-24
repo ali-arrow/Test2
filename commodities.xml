@@ -15,6 +15,7 @@ http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/ba
 http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd">
 <!-- =========================================First Change================================   -->
 <!-- =========================================Second Change================================   -->
+<!-- =========================================Third Change================================   -->
 	<flow name="commodities:poll_for_changes" initialState="started">
 		<poll doc:name="Poll">
 			<fixed-frequency-scheduler frequency="300" 
