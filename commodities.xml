@@ -21,6 +21,8 @@ http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mul
 <!-- =========================================Third Change================================   -->
 <!-- =========================================Fourth Change after reverting================================   -->
 
+<!-- =========================================Changing things to merge them later================================   -->
+
 	<flow name="commodities:poll_for_changes" initialState="started">
 		<poll doc:name="Poll">
 			<fixed-frequency-scheduler frequency="300" 
