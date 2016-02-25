@@ -18,7 +18,11 @@ http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mul
 <!-- =========================================Third Change================================   -->
 <!-- =========================================Fourth Change after reverting================================   -->
 <!-- =========================================Changing Branch B2================================   -->
+
 <!-- =========================================Changing Branch B3 and then merging it with B2================================   -->
+
+<!-- =========================================Changing Branch B2 Again No1================================   -->
+
 
 	<flow name="commodities:poll_for_changes" initialState="started">
 		<poll doc:name="Poll">
