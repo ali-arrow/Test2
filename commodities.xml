@@ -17,6 +17,8 @@ http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mul
 <!-- =========================================Second Change================================   -->
 <!-- =========================================Third Change================================   -->
 <!-- =========================================Fourth Change after reverting================================   -->
+<!-- =========================================Changing Branch B2================================   -->
+
 	<flow name="commodities:poll_for_changes" initialState="started">
 		<poll doc:name="Poll">
 			<fixed-frequency-scheduler frequency="300" 
